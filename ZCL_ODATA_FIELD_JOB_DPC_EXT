@@ -1,0 +1,497 @@
+class ZCL_ODATA_FIELD_JOB_DPC_EXT definition
+  public
+  inheriting from ZCL_ODATA_FIELD_JOB_DPC
+  create public .
+
+public section.
+
+  methods /IWBEP/IF_MGW_APPL_SRV_RUNTIME~GET_ENTITY
+    redefinition .
+  methods /IWBEP/IF_MGW_APPL_SRV_RUNTIME~GET_ENTITYSET
+    redefinition .
+  methods /IWBEP/IF_MGW_APPL_SRV_RUNTIME~GET_EXPANDED_ENTITYSET
+    redefinition .
+  methods /IWBEP/IF_MGW_APPL_SRV_RUNTIME~GET_EXPANDED_ENTITY
+    redefinition .
+protected section.
+
+  methods JOBHEADERSET_GET_ENTITYSET
+    redefinition .
+  methods JOBLOGSET_GET_ENTITY
+    redefinition .
+  methods JOBLOGSET_GET_ENTITYSET
+    redefinition .
+private section.
+ENDCLASS.
+
+
+
+CLASS ZCL_ODATA_FIELD_JOB_DPC_EXT IMPLEMENTATION.
+
+
+CLASS zcl_odata_field_job_dpc_ext DEFINITION PUBLIC INHERITING FROM zcl_odata_field_job_dpc.
+  PUBLIC SECTION.
+    method /iwbep/if_mgw_appl_srv_runtime~get_entityset REDEFINITION.
+  PRIVATE SECTION.
+    METHODS:
+      get_jobheaders
+        IMPORTING it_filter          TYPE /iwbep/t_mgw_select_option OPTIONAL
+        RETURNING VALUE(rt_entityset) TYPE zcl_odata_field_job_mpc_ext=>tt_jobheader
+        RAISING   /iwbep/cx_mgw_tech_exception,
+
+      get_joblogs
+        IMPORTING io_filter          TYPE REF TO /iwbep/if_mgw_req_filter OPTIONAL
+        RETURNING VALUE(rt_entityset) TYPE zcl_odata_field_job_mpc_ext=>tt_joblog
+        RAISING   /iwbep/cx_mgw_tech_exception,
+
+      apply_filter_to_where
+        IMPORTING it_filter        TYPE /iwbep/t_mgw_select_option
+        EXPORTING ev_where_clause TYPE string
+        RAISING   /iwbep/cx_mgw_tech_exception.
+ENDCLASS.
+
+CLASS zcl_odata_field_job_dpc_ext IMPLEMENTATION.
+
+  METHOD /iwbep/if_mgw_appl_srv_runtime~get_entityset.
+    DATA: lo_filter TYPE REF TO /iwbep/if_mgw_req_filter,
+          lt_filter TYPE /iwbep/t_mgw_select_option.
+
+    CASE iv_entity_name.
+      WHEN 'JobHeaderSet'.
+        lo_filter = io_tech_request_context->get_filter( ).
+        IF lo_filter IS BOUND.
+          lt_filter = lo_filter->get_filter_select_options( ).
+        ENDIF.
+
+        DATA(lt_jobheaders) = get_jobheaders( lt_filter ).
+        copy_data_to_ref(
+          EXPORTING is_data = lt_jobheaders
+          CHANGING  cr_data = er_entityset ).
+
+        " Set count for $count requests
+        IF io_tech_request_context->has_inlinecount( ) = abap_true.
+          es_response_context-inlinecount = lines( lt_jobheaders ).
+        ENDIF.
+
+      WHEN 'JobLogSet'.
+        lo_filter = io_tech_request_context->get_filter( ).
+        DATA(lt_joblogs) = get_joblogs( lo_filter ).
+        copy_data_to_ref(
+          EXPORTING is_data = lt_joblogs
+          CHANGING  cr_data = er_entityset ).
+
+        IF io_tech_request_context->has_inlinecount( ) = abap_true.
+          es_response_context-inlinecount = lines( lt_joblogs ).
+        ENDIF.
+
+      WHEN OTHERS.
+        RAISE EXCEPTION TYPE /iwbep/cx_mgw_tech_exception
+          EXPORTING
+            textid = /iwbep/cx_mgw_tech_exception=>entity_not_found.
+    ENDCASE.
+  ENDMETHOD.
+
+  METHOD get_jobheaders.
+    DATA: lv_where TYPE string.
+
+    " Apply filters if provided
+    IF it_filter IS NOT INITIAL.
+      apply_filter_to_where(
+        EXPORTING it_filter = it_filter
+        IMPORTING ev_where_clause = lv_where ).
+    ELSE.
+      " Default filter for open jobs if no filter provided
+      lv_where = `STATUS = 'Open'`.
+    ENDIF.
+
+    " Execute query with dynamic where clause
+    SELECT * FROM zjobs_hdr
+      INTO TABLE @DATA(lt_jobs_hdr)
+      WHERE (lv_where).
+
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_tech_exception
+        EXPORTING
+          textid = /iwbep/cx_mgw_tech_exception=>internal_error.
+    ENDIF.
+
+    rt_entityset = CORRESPONDING #( lt_jobs_hdr MAPPING
+      JobId      = job_id
+      Description = description
+      Status     = status
+      " Add other field mappings as needed
+    ).
+  ENDMETHOD.
+
+  METHOD get_joblogs.
+    DATA: lt_filter  TYPE /iwbep/t_mgw_select_option,
+          lv_where   TYPE string.
+
+    " Get filter options if filter object is provided
+    IF io_filter IS BOUND.
+      lt_filter = io_filter->get_filter_select_options( ).
+      apply_filter_to_where(
+        EXPORTING it_filter = lt_filter
+        IMPORTING ev_where_clause = lv_where ).
+    ENDIF.
+
+    " Execute query
+    IF lv_where IS NOT INITIAL.
+      SELECT * FROM zjobs_log
+        INTO TABLE @DATA(lt_jobs_log)
+        WHERE (lv_where).
+    ELSE.
+      SELECT * FROM zjobs_log
+        INTO TABLE @lt_jobs_log.
+    ENDIF.
+
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_tech_exception
+        EXPORTING
+          textid = /iwbep/cx_mgw_tech_exception=>internal_error.
+    ENDIF.
+
+    rt_entityset = CORRESPONDING #( lt_jobs_log MAPPING
+      LogId     = log_id
+      JobId     = job_id
+      Timestamp = timestamp
+      Message   = message
+      " Add other field mappings as needed
+    ).
+  ENDMETHOD.
+
+  METHOD apply_filter_to_where.
+    DATA: lv_condition TYPE string.
+
+    CLEAR ev_where_clause.
+
+    LOOP AT it_filter INTO DATA(ls_filter).
+      CASE ls_filter-property.
+        WHEN 'Status'.
+          " Handle status filter (example for single value)
+          READ TABLE ls_filter-select_options INDEX 1 INTO DATA(ls_option).
+          IF sy-subrc = 0.
+            lv_condition = |STATUS = '{ ls_option-low }'|.
+          ENDIF.
+
+        WHEN 'JobId'.
+          " Handle job ID filter (example for range)
+          LOOP AT ls_filter-select_options INTO ls_option.
+            IF lv_condition IS INITIAL.
+              lv_condition = |JOB_ID { ls_option-sign }{ ls_option-option } '{ ls_option-low }'|.
+            ELSE.
+              lv_condition = |{ lv_condition } AND JOB_ID { ls_option-sign }{ ls_option-option } '{ ls_option-low }'|.
+            ENDIF.
+          ENDLOOP.
+
+        " Add other filter properties as needed
+      ENDCASE.
+
+      IF ev_where_clause IS INITIAL.
+        ev_where_clause = lv_condition.
+      ELSE.
+        ev_where_clause = |{ ev_where_clause } AND { lv_condition }|.
+      ENDIF.
+
+      CLEAR lv_condition.
+    ENDLOOP.
+  ENDMETHOD.
+
+ENDCLASS.
+
+
+METHOD /iwbep/if_mgw_appl_srv_runtime~get_expanded_entityset.
+*  DATA: lv_entityset   TYPE string,
+*        lt_jobheaders  TYPE TABLE OF zjobs_log,
+*        ls_jobheader   TYPE zjobs_log,
+*        lt_response    TYPE zcl_odata_field_job_mpc_ext=>tt_joblog.
+*
+*  CONSTANTS: lc_nav_to_log TYPE string VALUE 'JobLogSet'.
+*
+*  IF io_tech_request_context IS NOT BOUND.
+*    RETURN.
+*  ENDIF.
+*
+*  io_tech_request_context->get_entity_set_name(
+*    RECEIVING rv_entity_set = lv_entityset
+*  ).
+*
+**  IF lv_entityset = 'JobHeaderSet'.
+**    SELECT * FROM zjobs_hdr INTO TABLE lt_jobheaders.
+*
+**
+*
+**    LOOP AT lt_jobheaders INTO ls_jobheader.
+**      DATA(ls_response) = CORRESPONDING zcl_odata_field_job_mpc_ext=>ts_jobheader( ls_jobheader ).
+**
+**      APPEND ls_response TO lt_response.
+**    ENDLOOP.
+*
+*IF lv_entityset = 'JobLogSet'.
+*  SELECT * FROM zjobs_log INTO TABLE lt_jobheaders.
+*
+*
+*    LOOP AT lt_jobheaders INTO ls_jobheader.
+*      DATA(ls_response) = CORRESPONDING zcl_odata_field_job_mpc_ext=>ts_joblog( ls_jobheader ).
+**
+*      APPEND ls_response TO lt_response.
+*    ENDLOOP.
+*
+*    copy_data_to_ref(
+*      EXPORTING
+*        is_data = lt_response
+*      CHANGING
+*        cr_data = er_entityset
+*    ).
+*
+*    APPEND lc_nav_to_log TO et_expanded_tech_clauses.
+*  ENDIF.
+
+
+
+*  METHOD jobheaderset_get_expanded_entityset.
+
+  DATA: lv_entityset   TYPE string,
+        lt_jobheaders  TYPE TABLE OF zjobs_hdr,
+        ls_jobheader   TYPE zjobs_hdr,
+        lt_joblogs     TYPE TABLE OF zjobs_log,
+        lt_response    TYPE zcl_odata_field_job_mpc_ext=>tt_jobheader,
+        ls_response    TYPE zcl_odata_field_job_mpc_ext=>ts_jobheader,
+        lt_log_entities TYPE zcl_odata_field_job_mpc_ext=>tt_joblog,
+        ls_log_entity   TYPE zcl_odata_field_job_mpc_ext=>ts_joblog.
+
+  CONSTANTS: lc_nav_to_log TYPE string VALUE 'JobLogSet'.
+
+  IF io_tech_request_context IS NOT BOUND.
+    RETURN.
+  ENDIF.
+
+  " Get requested entity set name
+  io_tech_request_context->get_entity_set_name(
+    RECEIVING rv_entity_set = lv_entityset
+  ).
+
+  IF lv_entityset = 'JobHeaderSet'.
+
+    " Read headers
+    SELECT * FROM zjobs_hdr INTO TABLE lt_jobheaders.
+
+    LOOP AT lt_jobheaders INTO ls_jobheader.
+
+      CLEAR: ls_response, lt_log_entities.
+
+      " Move header fields
+      MOVE-CORRESPONDING ls_jobheader TO ls_response.
+
+      " Get associated items (logs) for each header
+      SELECT * FROM zjobs_log INTO TABLE lt_joblogs
+        WHERE job_id = ls_jobheader-job_id.
+
+      LOOP AT lt_joblogs INTO DATA(ls_joblog).
+        CLEAR ls_log_entity.
+        MOVE-CORRESPONDING ls_joblog TO ls_log_entity.
+        APPEND ls_log_entity TO lt_log_entities.
+      ENDLOOP.
+
+*       Attach logs to header response using navigation property
+      ls_response-job_id = ls_log_entity-job_id.
+
+*      APPEND ls_response TO lt_response.
+
+APPEND ls_log_entity TO lt_log_entities.
+
+    ENDLOOP.
+
+    " Return data
+    copy_data_to_ref(
+      EXPORTING
+        is_data = lt_log_entities
+      CHANGING
+        cr_data = er_entityset
+    ).
+
+
+    " Let framework know expanded entity is included
+    APPEND lc_nav_to_log TO et_expanded_tech_clauses.
+
+  ENDIF.
+
+
+*ENDMETHOD.
+ENDMETHOD.
+
+
+  method JOBHEADERSET_GET_ENTITYSET.
+*
+*  DATA: lt_jobs_hdr  TYPE TABLE OF zjobs_hdr,
+*          ls_jobs_hdr  TYPE zjobs_hdr,
+*          lt_entityset TYPE zcl_odata_field_job_mpc_ext=>tt_jobheader.
+*
+*    " Select only open jobs
+*    SELECT job_id
+*           equip_id
+*           status
+*           fault_code
+*          priority
+*          assigned_to
+*          job_date
+*          created_by
+*          created_on
+*      FROM zjobs_hdr
+*      INTO TABLE lt_entityset UP TO 10 ROWS
+*      WHERE status = 'Open' .
+*    IF sy-subrc = 0.
+*      move lt_entityset to et_entityset.
+*    ENDIF.
+
+
+*DATA: lt_jobs_hdr  TYPE TABLE OF zjobs_hdr,
+*        ls_jobs_hdr  TYPE zjobs_hdr,
+*        lt_entityset TYPE zcl_odata_field_job_mpc_ext=>tt_jobheader,
+*        ls_entity    TYPE zcl_odata_field_job_mpc_ext=>ts_jobheader.
+*
+*  " Select only open jobs
+*  SELECT * FROM zjobs_hdr
+*    INTO TABLE lt_jobs_hdr
+*    UP TO 10 ROWS
+*    WHERE status = 'Open'.
+*
+**  LOOP AT lt_jobs_hdr INTO ls_jobs_hdr.
+**    MOVE-CORRESPONDING ls_jobs_hdr TO ls_entity.
+**    APPEND ls_entity TO lt_entityset.
+***    clear ls_entity.
+**  ENDLOOP.
+*move lt_jobs_hdr to et_entityset.
+*  copy_data_to_ref(
+*    EXPORTING
+*      is_data = lt_entityset
+*    CHANGING
+*      cr_data = et_entityset ).
+  endmethod.
+
+
+  method JOBLOGSET_GET_ENTITY.
+**TRY.
+*CALL METHOD SUPER->JOBLOGSET_GET_ENTITY
+*  EXPORTING
+*    IV_ENTITY_NAME          =
+*    IV_ENTITY_SET_NAME      =
+*    IV_SOURCE_NAME          =
+*    IT_KEY_TAB              =
+**    io_request_object       =
+**    io_tech_request_context =
+*    IT_NAVIGATION_PATH      =
+**  IMPORTING
+**    er_entity               =
+**    es_response_context     =
+*    .
+**  CATCH /iwbep/cx_mgw_busi_exception.
+**  CATCH /iwbep/cx_mgw_tech_exception.
+**ENDTRY.
+  endmethod.
+
+
+METHOD /iwbep/if_mgw_appl_srv_runtime~get_entity.
+  DATA:
+    lv_entityset TYPE string,
+    lt_key_tab   TYPE /iwbep/t_mgw_name_value_pair,
+    ls_key       TYPE /iwbep/s_mgw_name_value_pair,
+    lv_job_id    TYPE zjobs_hdr-job_id,
+    lv_log_seq   TYPE zjobs_log-log_seq,
+    ls_job_log   TYPE zjobs_log,
+    ls_response  TYPE zcl_odata_field_job_mpc_ext=>ts_joblog.
+
+  " Corrected method call with proper parentheses
+  io_tech_request_context->get_entity_set_name(
+    RECEIVING
+      rv_entity_set = lv_entityset
+  ).
+
+  " Rest of your implementation
+  lt_key_tab = it_key_tab.
+
+  IF lv_entityset = 'JobLogSet'.
+    LOOP AT lt_key_tab INTO ls_key.
+      CASE ls_key-name.
+        WHEN 'Job_ID'.
+          lv_job_id = ls_key-value.
+        WHEN 'Log_Seq'.
+          lv_log_seq = CONV #( ls_key-value ).
+      ENDCASE.
+    ENDLOOP.
+
+    SELECT SINGLE * FROM zjobs_log INTO ls_job_log
+     WHERE job_id = lv_job_id
+       AND log_seq = lv_log_seq.
+
+    IF sy-subrc = 0.
+      ls_response-job_id         = ls_job_log-job_id.
+      ls_response-log_seq        = ls_job_log-log_seq.
+      ls_response-action_taken   = ls_job_log-action_taken.
+      ls_response-time_spent_hrs = ls_job_log-time_spent_hrs.
+      ls_response-technician_note = ls_job_log-technician_note.
+      ls_response-created_by     = ls_job_log-created_by.
+      ls_response-created_on     = ls_job_log-created_on.
+    ELSE.
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING
+          textid = /iwbep/cx_mgw_busi_exception=>entity_not_found
+          message = |No log found for Job { lv_job_id } Seq { lv_log_seq }|.
+    ENDIF.
+
+    copy_data_to_ref(
+      EXPORTING is_data = ls_response
+      CHANGING cr_data = er_entity
+    ).
+  ENDIF.
+ENDMETHOD.
+
+
+  method /IWBEP/IF_MGW_APPL_SRV_RUNTIME~GET_EXPANDED_ENTITY.
+**TRY.
+*CALL METHOD SUPER->/IWBEP/IF_MGW_APPL_SRV_RUNTIME~GET_EXPANDED_ENTITY
+**  EXPORTING
+**    iv_entity_name           =
+**    iv_entity_set_name       =
+**    iv_source_name           =
+**    it_key_tab               =
+**    it_navigation_path       =
+**    io_expand                =
+**    io_tech_request_context  =
+**  IMPORTING
+**    er_entity                =
+**    es_response_context      =
+**    et_expanded_clauses      =
+**    et_expanded_tech_clauses =
+*    .
+**  CATCH /iwbep/cx_mgw_busi_exception.
+**  CATCH /iwbep/cx_mgw_tech_exception.
+**ENDTRY.
+
+  endmethod.
+
+
+  method JOBLOGSET_GET_ENTITYSET.
+**TRY.
+*CALL METHOD SUPER->JOBLOGSET_GET_ENTITYSET
+*  EXPORTING
+*    IV_ENTITY_NAME           =
+*    IV_ENTITY_SET_NAME       =
+*    IV_SOURCE_NAME           =
+*    IT_FILTER_SELECT_OPTIONS =
+*    IS_PAGING                =
+*    IT_KEY_TAB               =
+*    IT_NAVIGATION_PATH       =
+*    IT_ORDER                 =
+*    IV_FILTER_STRING         =
+*    IV_SEARCH_STRING         =
+**    io_tech_request_context  =
+**  IMPORTING
+**    et_entityset             =
+**    es_response_context      =
+*    .
+**  CATCH /iwbep/cx_mgw_busi_exception.
+**  CATCH /iwbep/cx_mgw_tech_exception.
+**ENDTRY.
+  endmethod.
+ENDCLASS.
