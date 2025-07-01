@@ -1,0 +1,22 @@
+  method /IWBEP/IF_MGW_APPL_SRV_RUNTIME~CREATE_ENTITY.
+        data: ls_data type ZCL_ZPROJ_CSV_866_MPC_EXT=>ts_file,
+          ls_entity like ls_data,
+          lv_output type xstring.
+*          ls_entity like er_entity.
+"Read the data from the ODATA service in BASE64 format
+call method io_data_provider->read_entry_data
+IMPORTING
+  es_data = ls_entity.
+
+if ls_entity is NOT INITIAL.
+  ls_data-filename = ls_entity-filename.
+  ls_data-filedata = ls_entity-filedata.
+endif.
+
+"Call ZRFC_ODATA_FILE_UPLOAD to store the DECODED content in to AL11.
+
+CALL FUNCTION 'ZRFC_ODATA_FILE_UPLOAD'
+ EXPORTING
+   IM_FILEDATA       = ls_data-filedata
+   IM_FILENAME       = ls_data-filename.
+  endmethod.
