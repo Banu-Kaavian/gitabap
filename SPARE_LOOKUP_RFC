@@ -1,0 +1,30 @@
+FUNCTION ZSPARE_UPLOAD.
+*"----------------------------------------------------------------------
+*"*"Local Interface:
+*"  IMPORTING
+*"     VALUE(SPARE_ID) TYPE  ZJOBS_SPARES-SPARE_ID
+*"     VALUE(EQUIP_ID) TYPE  ZJOBS_SPARES-EQUIP_ID
+*"     VALUE(SPARE_NAME) TYPE  ZJOBS_SPARES-SPARE_NAME
+*"     REFERENCE(LAST_USED_DATE) TYPE  ZJOBS_SPARES-LAST_USED_DATE
+*"     VALUE(STOCK_QTY) TYPE  ZJOBS_SPARES-STOCK_QTY
+*"----------------------------------------------------------------------
+
+  DATA: ls_spares TYPE zjobs_spares.
+
+ls_spares-spare_id       = spare_id.
+ls_spares-equip_id       = equip_id.
+ls_spares-spare_name     = spare_name.
+ls_spares-last_used_date = last_used_date.
+ls_spares-stock_qty      = stock_qty.
+
+INSERT zjobs_spares FROM ls_spares.
+IF sy-subrc <> 0.
+  RAISE EXCEPTION TYPE cx_sy_open_sql_db.
+ENDIF.
+
+
+
+
+
+
+ENDFUNCTION.
